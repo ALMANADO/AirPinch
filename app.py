@@ -1,11 +1,8 @@
-import sys
-import cv2 as cv2_headless  # import headless version first
-sys.modules['cv2'] = cv2_headless  # replace 'cv2' in sys.modules with headless
-
 import streamlit as st
 import numpy as np
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
+from PIL import Image, ImageDraw
 
 # ------------------------------
 # Configuration
@@ -32,12 +29,10 @@ def is_pinch(landmarks, frame_w, frame_h):
 
 def is_index_only(landmarks):
     """Check if only index finger is extended (others folded)"""
-    # Compare tip vs PIP y-coordinates (tip above PIP = extended)
     index_extended = landmarks[8].y < landmarks[6].y
     middle_folded = landmarks[12].y > landmarks[10].y
     ring_folded = landmarks[16].y > landmarks[14].y
     pinky_folded = landmarks[20].y > landmarks[18].y
-    # For thumb we ignore (can be anywhere, but not pinched – that's handled separately)
     return index_extended and middle_folded and ring_folded and pinky_folded
 
 def map_to_canvas(x, y, frame_w, frame_h):
@@ -46,22 +41,27 @@ def map_to_canvas(x, y, frame_w, frame_h):
     cy = int(y * CANVAS_HEIGHT)
     return np.clip(cx, 0, CANVAS_WIDTH-1), np.clip(cy, 0, CANVAS_HEIGHT-1)
 
-def draw_sparkles(img, center, count=12):
-    """Draw sparkle effect around a point"""
+def draw_sparkles(draw, center, count=12):
+    """Draw sparkle effect around a point using PIL"""
     for _ in range(count):
         angle = np.random.uniform(0, 2*np.pi)
         dist = np.random.uniform(5, 15)
         dx = int(dist * np.cos(angle))
         dy = int(dist * np.sin(angle))
-        color = (np.random.randint(200,255), np.random.randint(200,255), np.random.randint(200,255))
-        cv2.circle(img, (center[0]+dx, center[1]+dy), np.random.randint(2,4), color, -1)
+        color = tuple(np.random.randint(200, 255, 3).tolist())
+        radius = np.random.randint(2, 4)
+        draw.ellipse(
+            (center[0]+dx-radius, center[1]+dy-radius,
+             center[0]+dx+radius, center[1]+dy+radius),
+            fill=color
+        )
 
 # ------------------------------
-# Video Transformer
+# Video Transformer (PIL-based)
 # ------------------------------
 class HandDrawingTransformer(VideoTransformerBase):
     def _init_(self):
-        self.canvas = np.zeros((CANVAS_HEIGHT, CANVAS_WIDTH, 3), dtype=np.uint8)
+        self.canvas = Image.new("RGB", (CANVAS_WIDTH, CANVAS_HEIGHT), color="black")
         self.strokes = []                     # list of strokes, each stroke = list of points
         self.current_stroke = []               # points being drawn now
         self.selected_stroke_idx = None        # index of stroke being dragged
@@ -70,22 +70,26 @@ class HandDrawingTransformer(VideoTransformerBase):
         self.prev_finger_pos = None
 
     def transform(self, frame):
-        img = frame.to_ndarray(format="bgr24")
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Get PIL image from frame
+        img_pil = frame.to_image()
+        img_rgb = np.array(img_pil)
         results = hands.process(img_rgb)
 
+        # Start with a copy of the canvas
         overlay = self.canvas.copy()
+        draw = ImageDraw.Draw(overlay)
+
         index_pos = None
         pinch_pos = None
         pinching = False
 
         if results.multi_hand_landmarks:
             for hand_landmarks in results.multi_hand_landmarks:
-                h, w, _ = img.shape
-                # Draw all landmarks on overlay (palm trace)
+                h, w, _ = img_rgb.shape
+                # Draw all landmarks on overlay (palm trace) as small green circles
                 for lm in hand_landmarks.landmark:
                     cx, cy = map_to_canvas(lm.x, lm.y, w, h)
-                    cv2.circle(overlay, (cx, cy), 2, (0, 255, 0), -1)
+                    draw.ellipse((cx-2, cy-2, cx+2, cy+2), fill="green")
 
                 # Index tip position
                 index_tip = hand_landmarks.landmark[8]
@@ -155,30 +159,33 @@ class HandDrawingTransformer(VideoTransformerBase):
         # Draw all stored strokes on overlay
         for stroke in self.strokes:
             for i in range(1, len(stroke)):
-                cv2.line(overlay, stroke[i-1], stroke[i], (255, 255, 255), 3)
+                draw.line([stroke[i-1], stroke[i]], fill="white", width=3)
 
         # Draw current stroke
         if self.current_stroke and len(self.current_stroke) > 1:
             for i in range(1, len(self.current_stroke)):
-                cv2.line(overlay, self.current_stroke[i-1], self.current_stroke[i], (255, 255, 255), 3)
+                draw.line([self.current_stroke[i-1], self.current_stroke[i]], fill="white", width=3)
 
         # Sparkle effect at finger position if drawing
         if index_pos and self.current_stroke and not pinching:
-            draw_sparkles(overlay, index_pos)
+            draw_sparkles(draw, index_pos)
 
         # Highlight selected stroke
         if self.selected_stroke_idx is not None:
             stroke = self.strokes[self.selected_stroke_idx]
             for i in range(1, len(stroke)):
-                cv2.line(overlay, stroke[i-1], stroke[i], (0, 255, 255), 4)
+                draw.line([stroke[i-1], stroke[i]], fill="yellow", width=4)
 
+        # Update canvas
         self.canvas = overlay
-        return cv2.cvtColor(self.canvas, cv2.COLOR_RGB2BGR)
+
+        # Return as numpy array (RGB)
+        return np.array(self.canvas)
 
 # ------------------------------
 # Streamlit UI
 # ------------------------------
-st.set_page_config(page_title="HandSpark: Air Draw with Pinch", layout="wide")
+st.set_page_config(page_title="AirPinch – Draw with Gestures", layout="wide")
 
 st.markdown("""
 <style>
@@ -188,7 +195,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🖐️ HandSpark – Draw in the Air with Sparkles")
+st.title("🖐️ AirPinch – Draw in the Air with Sparkles")
 st.markdown("""
 *Instructions*:
 - *Draw: Extend only your **index finger* (others folded). Move it to draw. ✨ Sparkles appear!
