@@ -2,15 +2,15 @@ import streamlit as st
 import cv2
 import numpy as np
 import mediapipe as mp
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, ClientSettings
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
 # ------------------------------
 # Configuration
 # ------------------------------
-CANVAS_WIDTH = 960          # Larger canvas
+CANVAS_WIDTH = 960
 CANVAS_HEIGHT = 720
-SELECT_THRESHOLD = 40       # pixels – distance to select a stroke
-PINCH_DIST_THRESHOLD = 30   # pixels – max distance between index tip and thumb tip to consider pinched
+SELECT_THRESHOLD = 40          # pixels – distance to select a stroke
+PINCH_DIST_THRESHOLD = 30      # pixels – max distance between index and thumb to consider pinched
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5)
@@ -22,26 +22,20 @@ def is_pinch(landmarks, frame_w, frame_h):
     """Return True if index tip and thumb tip are close (in canvas pixels)"""
     h8 = landmarks[8]   # index tip
     h4 = landmarks[4]   # thumb tip
-    # Convert normalized to canvas pixels
     x1, y1 = int(h8.x * CANVAS_WIDTH), int(h8.y * CANVAS_HEIGHT)
     x2, y2 = int(h4.x * CANVAS_WIDTH), int(h4.y * CANVAS_HEIGHT)
     dist = np.hypot(x1 - x2, y1 - y2)
-    return dist < PINCH_DIST_THRESHOLD, (x1, y1)  # return pinch status and index tip position
+    return dist < PINCH_DIST_THRESHOLD, (x1, y1)
 
 def is_index_only(landmarks):
     """Check if only index finger is extended (others folded)"""
-    # Thumb extended if tip (4) is to the right of IP (3) for right hand? We'll simplify: just check if other fingers are folded.
-    # We'll use a more robust method: compare y-coordinates of tip vs pip for each finger.
-    tips_ids = [8, 12, 16, 20]
-    pip_ids = [6, 10, 14, 18]
-    # For index, we want tip above pip
+    # Compare tip vs PIP y-coordinates (tip above PIP = extended)
     index_extended = landmarks[8].y < landmarks[6].y
-    # For others, we want tip below pip (folded)
-    others_folded = all(landmarks[tip].y > landmarks[pip].y for tip, pip in zip(tips_ids[1:], pip_ids[1:]))
-    # Thumb: we consider thumb extended if tip is to the left of IP? But for simplicity, ignore thumb for now.
-    # We'll require thumb not pinched (i.e., not too close) – but pinch detection is separate.
-    # For drawing mode, we want only index extended and no pinch.
-    return index_extended and others_folded
+    middle_folded = landmarks[12].y > landmarks[10].y
+    ring_folded = landmarks[16].y > landmarks[14].y
+    pinky_folded = landmarks[20].y > landmarks[18].y
+    # For thumb we ignore (can be anywhere, but not pinched – that's handled separately)
+    return index_extended and middle_folded and ring_folded and pinky_folded
 
 def map_to_canvas(x, y, frame_w, frame_h):
     """Map normalized hand coordinates to canvas pixel coordinates"""
@@ -69,15 +63,14 @@ class HandDrawingTransformer(VideoTransformerBase):
         self.current_stroke = []               # points being drawn now
         self.selected_stroke_idx = None        # index of stroke being dragged
         self.drag_offset = (0, 0)              # offset between pinch point and stroke center
-        self.prev_pinch_pos = None              # previous pinch position for delta calculation
-        self.prev_finger_pos = None              # for drawing continuity
+        self.prev_pinch_pos = None
+        self.prev_finger_pos = None
 
     def transform(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = hands.process(img_rgb)
 
-        # Create a fresh overlay for hand landmarks and strokes
         overlay = self.canvas.copy()
         index_pos = None
         pinch_pos = None
@@ -91,7 +84,7 @@ class HandDrawingTransformer(VideoTransformerBase):
                     cx, cy = map_to_canvas(lm.x, lm.y, w, h)
                     cv2.circle(overlay, (cx, cy), 2, (0, 255, 0), -1)
 
-                # Get index tip position
+                # Index tip position
                 index_tip = hand_landmarks.landmark[8]
                 ix, iy = map_to_canvas(index_tip.x, index_tip.y, w, h)
                 index_pos = (ix, iy)
@@ -127,7 +120,6 @@ class HandDrawingTransformer(VideoTransformerBase):
                         if self.prev_pinch_pos is not None:
                             dx = p_pos[0] - self.prev_pinch_pos[0]
                             dy = p_pos[1] - self.prev_pinch_pos[1]
-                            # Translate all points
                             stroke = self.strokes[self.selected_stroke_idx]
                             self.strokes[self.selected_stroke_idx] = [(x+dx, y+dy) for (x,y) in stroke]
                         self.prev_pinch_pos = p_pos
@@ -140,8 +132,8 @@ class HandDrawingTransformer(VideoTransformerBase):
                     if is_index_only(hand_landmarks.landmark):
                         # Drawing
                         if self.prev_finger_pos is not None:
-                            # Add point and draw line (if moved enough)
-                            dist = np.hypot(index_pos[0]-self.prev_finger_pos[0], index_pos[1]-self.prev_finger_pos[1])
+                            dist = np.hypot(index_pos[0]-self.prev_finger_pos[0],
+                                            index_pos[1]-self.prev_finger_pos[1])
                             if dist > 5:  # avoid too many points
                                 if len(self.current_stroke) == 0:
                                     self.current_stroke.append(index_pos)
@@ -177,16 +169,13 @@ class HandDrawingTransformer(VideoTransformerBase):
             for i in range(1, len(stroke)):
                 cv2.line(overlay, stroke[i-1], stroke[i], (0, 255, 255), 4)
 
-        # Update canvas
         self.canvas = overlay
-
-        # Return the canvas as BGR for display
         return cv2.cvtColor(self.canvas, cv2.COLOR_RGB2BGR)
 
 # ------------------------------
-# Streamlit UI with full-width canvas
+# Streamlit UI
 # ------------------------------
-st.set_page_config(page_title="Air Draw with Pinch Drag", layout="wide")
+st.set_page_config(page_title="HandSpark: Air Draw with Pinch", layout="wide")
 
 st.markdown("""
 <style>
@@ -196,7 +185,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🖐️ Air Draw & Pinch to Drag")
+st.title("🖐️ HandSpark – Draw in the Air with Sparkles")
 st.markdown("""
 *Instructions*:
 - *Draw: Extend only your **index finger* (others folded). Move it to draw. ✨ Sparkles appear!
@@ -207,10 +196,8 @@ st.markdown("""
 webrtc_streamer(
     key="hand-draw-pinch",
     video_transformer_factory=HandDrawingTransformer,
-    client_settings=ClientSettings(
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": True, "audio": False},
-    ),
+    rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+    media_stream_constraints={"video": True, "audio": False},
     async_processing=True,
 )
 
