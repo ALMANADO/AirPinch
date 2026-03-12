@@ -1,5 +1,5 @@
 streamlit
-mediapipe==0.9.0.1
+mediapipe  # No version pin needed; will install latest (e.g., 0.10.32)
 numpy
 Pillow
 streamlit-webrtc>=0.48.0
