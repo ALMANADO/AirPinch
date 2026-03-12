@@ -1,5 +1,8 @@
+import sys
+import cv2 as cv2_headless  # import headless version first
+sys.modules['cv2'] = cv2_headless  # replace 'cv2' in sys.modules with headless
+
 import streamlit as st
-import cv2
 import numpy as np
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
