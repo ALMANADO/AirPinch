@@ -2,5 +2,5 @@ streamlit
 opencv-python-headless==4.10.0.84   # specify a known version
 mediapipe
 numpy
-streamlit-webrtc
+streamlit-webrtc>=0.48.0
 av
