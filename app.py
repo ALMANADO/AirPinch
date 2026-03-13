@@ -242,19 +242,100 @@ function tickSparkles() {
   }
 }
 
-// ─── Landmark dots ───────────────────────────────────────────────────────────
-function drawLandmarks(L) {
-  for (const lm of L) {
-    const p = lc(lm);
+// ─── Glowing Hand Skeleton ────────────────────────────────────────────────────
+// MediaPipe hand connections (21 landmarks)
+const HAND_CONNECTIONS = [
+  // Palm
+  [0,1],[1,2],[2,3],[3,4],       // thumb
+  [0,5],[5,6],[6,7],[7,8],       // index
+  [0,9],[9,10],[10,11],[11,12],  // middle
+  [0,13],[13,14],[14,15],[15,16],// ring
+  [0,17],[17,18],[18,19],[19,20],// pinky
+  [5,9],[9,13],[13,17]           // knuckle band
+];
+
+// Finger tip indices for bigger dots
+const FINGERTIPS = new Set([4,8,12,16,20]);
+
+function drawHandSkeleton(L) {
+  const pts = L.map(lm => lc(lm));
+
+  // ── Bone connections ──
+  for (const [a,b] of HAND_CONNECTIONS) {
+    const p1 = pts[a], p2 = pts[b];
+
+    // Outer soft glow
     ctx.save();
     ctx.beginPath();
-    ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
-    ctx.fillStyle   = 'rgba(0,255,120,0.7)';
-    ctx.shadowColor = '#00ff88';
-    ctx.shadowBlur  = 6;
-    ctx.fill();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.strokeStyle = 'rgba(0,220,255,0.10)';
+    ctx.lineWidth   = 14;
+    ctx.filter      = 'blur(6px)';
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.restore();
+
+    // Mid glow
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.strokeStyle = 'rgba(0,220,255,0.28)';
+    ctx.lineWidth   = 5;
+    ctx.filter      = 'blur(2px)';
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+    ctx.restore();
+
+    // Sharp bright core
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.strokeStyle = 'rgba(160,240,255,0.90)';
+    ctx.lineWidth   = 1.5;
+    ctx.filter      = 'none';
+    ctx.lineCap     = 'round';
+    ctx.stroke();
     ctx.restore();
   }
+
+  // ── Joint dots ──
+  pts.forEach((p, i) => {
+    const isTip  = FINGERTIPS.has(i);
+    const isWrist = i === 0;
+    const r       = isTip ? 5 : isWrist ? 5 : 3;
+
+    // Outer glow
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r + 6, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(0,200,255,0.10)';
+    ctx.filter    = 'blur(4px)';
+    ctx.fill();
+    ctx.restore();
+
+    // Mid glow ring
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r + 2, 0, Math.PI*2);
+    ctx.fillStyle   = isTip ? 'rgba(0,255,220,0.35)' : 'rgba(0,200,255,0.25)';
+    ctx.shadowColor = '#00eeff';
+    ctx.shadowBlur  = 10;
+    ctx.fill();
+    ctx.restore();
+
+    // Bright core dot
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+    ctx.fillStyle   = isTip ? '#aaffee' : '#80e8ff';
+    ctx.shadowColor = '#00ffee';
+    ctx.shadowBlur  = isTip ? 14 : 8;
+    ctx.fill();
+    ctx.restore();
+  });
 }
 
 // ─── Main render loop ────────────────────────────────────────────────────────
@@ -330,7 +411,7 @@ function frame(landmarks) {
 
   if (!landmarks) return;
 
-  drawLandmarks(landmarks);
+  drawHandSkeleton(landmarks);
 
   const ip = lc(landmarks[8]);
   const { on: pinching, pos: pinchPos } = isPinch(landmarks);
